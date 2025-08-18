@@ -1,0 +1,19 @@
+# Parámetros globales para Drone Wars 2
+
+NUM_TARGETS=2
+BASE_PORT=40000
+ASSEMBLY_SIZE=5
+W=30      # prob derribo artillería
+Q=5       # prob pérdida de comunicación
+Z=5       # segundos de espera recuperación
+RANDOM_SEED=123
+
+# Velocidad lineal en X (unidades/segundo)
+VX=10
+
+# Radio de la órbita en zona de ensamble
+R=5
+
+# Paso angular en radianes por tick (tick = 1 seg)
+THETA_STEP=0.2
+
