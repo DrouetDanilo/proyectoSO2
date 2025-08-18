@@ -30,6 +30,18 @@ int main(int argc, char **argv){
     int center_port = port_for_center(BASE_PORT);
     int sock = make_udp_socket();
 
+    // bind antes de lanzar drones
+    struct sockaddr_in addr; memset(&addr,0,sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr(HOST);
+    addr.sin_port = htons(truck_port);
+    printf("[TRUCK %d] intentando bind en puerto %d\n", truck_id, truck_port);
+    if(bind(sock,(struct sockaddr*)&addr,sizeof(addr))<0){
+        perror("bind truck");
+        exit(1);
+    }
+    printf("[TRUCK %d] iniciado puerto %d\n", truck_id, truck_port);
+
     // announce truck ready
     msg_t m; memset(&m,0,sizeof(m));
     m.type = MSG_ARTILLERY;
@@ -55,15 +67,6 @@ int main(int argc, char **argv){
     }
 
     // truck listens for commands from center (e.g., REASSIGN_ONE_TO)
-    struct sockaddr_in addr; memset(&addr,0,sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = inet_addr(HOST);
-    addr.sin_port = htons(truck_port);
-    if(bind(sock,(struct sockaddr*)&addr,sizeof(addr))<0){
-        perror("bind truck");
-        exit(1);
-    }
-    printf("[TRUCK %d] iniciado puerto %d\n", truck_id, truck_port);
     msg_t rcv; struct sockaddr_in from;
     while(1){
         if(recv_msg(sock,&rcv,&from)<=0) { usleep(100000); continue; }
@@ -92,6 +95,7 @@ int main(int argc, char **argv){
                     cmd.swarm_id = truck_id;
                     cmd.drone_id = gid;
                     snprintf(cmd.text,sizeof(cmd.text),"TAKEOFF");
+                    printf("[TRUCK %d] Enviando TAKEOFF a drone %d (puerto %d)\n", truck_id, gid, dport);
                     send_msg(sock, dport, &cmd);
                 }
             }

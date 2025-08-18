@@ -52,6 +52,15 @@ void send_status(const char *txt){
     send_msg(sock, center_port, &m);
 }
 
+void send_pos(){
+    msg_t m; memset(&m,0,sizeof(m));
+    m.type = MSG_STATUS;
+    m.swarm_id = swarm_id;
+    m.drone_id = global_id;
+    snprintf(m.text, sizeof(m.text), "POS %.1f %.1f", x, y);
+    send_msg(sock, center_port, &m);
+}
+
 int is_detonated(){
     int v;
     state_lock(); v = detonated; state_unlock();
@@ -110,6 +119,7 @@ void *simulate_flight(void *arg){
         state_unlock();
 
         send_status("IN_ASSEMBLY");
+        send_pos(); // <--- AGREGADO
         // Espera TAKEOFF (tiempo corto para no bloquear totalmente)
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -133,6 +143,8 @@ void *simulate_flight(void *arg){
         x += vx;
         double locx = x;
         state_unlock();
+
+        send_pos(); // <--- AGREGADO
 
         if(!entered_defense && locx >= B){
             entered_defense = 1;
@@ -182,6 +194,8 @@ void *simulate_flight(void *arg){
         double locx = x;
         int cam = is_camera;
         state_unlock();
+
+        send_pos(); // <--- AGREGADO
 
         if(!announced_reassembly && locx >= A){
             announced_reassembly = 1;
