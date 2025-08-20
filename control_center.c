@@ -1,14 +1,10 @@
-// control_center.c (versión modificada con artillería)
+// control_center.c (corregido para delegar artillería a artillery.c)
 #include "common.h"
 #include <semaphore.h>
 #include <math.h>
 
 #define MAX_SWARMS 100
 #define MAX_DRONES_PER_SWARM 5
-
-// Zonas de defensa
-double B = 20.0;   // inicio zona defensa
-double A = 50.0;   // fin zona defensa
 
 typedef struct {
     int swarm_id;
@@ -159,28 +155,6 @@ int all_drones_finished(){
     return finished;
 }
 
-// Función para disparar artillería a drones en zona de defensa
-void artillery_fire(int swarm_id, int drone_id, double x) {
-    if(x >= B && x < A) {
-        if(rand()%100 < W) { // impacto exitoso
-            msg_t hit; memset(&hit,0,sizeof(hit));
-            hit.type = MSG_ARTILLERY;
-            hit.swarm_id = swarm_id;
-            hit.drone_id = drone_id;
-            snprintf(hit.text,sizeof(hit.text),"HIT");
-            int drone_port = port_for_drone(BASE_PORT, drone_id);
-            send_msg(center_sock, drone_port, &hit);
-
-            sem_wait(&sem_swarms);
-            swarms[swarm_id].active_count--;
-            if(swarms[swarm_id].active_count<0) swarms[swarm_id].active_count=0;
-            sem_post(&sem_swarms);
-
-            printf("[CENTER] Drone %d destruido por artillería (swarm %d)\n", drone_id, swarm_id);
-        }
-    }
-}
-
 void *listener_thread(void *arg) {
     (void)arg;
     struct sockaddr_in from;
@@ -215,7 +189,6 @@ void *listener_thread(void *arg) {
         else if(m.type==MSG_STATUS) {
             printf("[CENTER] STATUS swarm:%d drone:%d -> %s\n", m.swarm_id, m.drone_id, m.text);
 
-            // Procesar destrucción automática o pérdida de enlace
             if(strstr(m.text,"DETONATED") || strstr(m.text,"FUEL_ZERO_AUTODESTRUCT") || strstr(m.text,"LOST_LINK")){
                 sem_wait(&sem_swarms);
                 swarms[m.swarm_id].active_count--;
@@ -252,16 +225,27 @@ void *listener_thread(void *arg) {
                     reconform_from_neighbors(m.swarm_id);
                 }
             }
-            else if(strstr(m.text,"POS")) {
-                // Mensaje ejemplo: "POS 25.0 0.0"
-                double x_pos, y_pos;
-                if(sscanf(m.text,"POS %lf %lf",&x_pos,&y_pos)==2){
-                    artillery_fire(m.swarm_id, m.drone_id, x_pos);
-                }
-            }
+            // OJO: Ya no manejamos POS aquí, lo hace artillery
         }
         else if(m.type==MSG_ARTILLERY){
             printf("[CENTER] ARTILLERY MSG: %s\n", m.text);
+            if(strstr(m.text,"SHOT_DOWN")){
+                int did;
+                if(sscanf(m.text,"DRONE %d",&did)==1){
+                    // Encontrar swarm al que pertenecía
+                    for(int i=0;i<NUM_TARGETS;i++){
+                        for(int j=0;j<ASSEMBLY_SIZE;j++){
+                            if(swarms[i].drone_global_ids[j]==did){
+                                sem_wait(&sem_swarms);
+                                swarms[i].active_count--;
+                                if(swarms[i].active_count<0) swarms[i].active_count=0;
+                                sem_post(&sem_swarms);
+                                printf("[CENTER] Drone %d removido del swarm %d por artillería\n", did, i);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     return NULL;
@@ -297,7 +281,6 @@ int main(int argc, char **argv){
         sleep(5);
         print_status();
 
-        // Terminar si todos los drones ya completaron misión o fueron destruidos
         if(all_drones_finished()){
             printf("[CENTER] Todos los drones terminaron. Saliendo...\n");
             break;
@@ -311,4 +294,5 @@ int main(int argc, char **argv){
     close(center_sock);
     return 0;
 }
+
 
