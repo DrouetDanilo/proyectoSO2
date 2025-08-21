@@ -1,26 +1,41 @@
 CC=gcc
-CFLAGS=-Wall -g
-LIBS=-lpthread -lm -lrt
+CFLAGS=-Wall -pthread -lm -lrt
+TARGETS=control_center truck drone artillery
 
-OBJS=common.o control_center.o truck.o drone.o artillery.o
-
-all: control_center truck drone artillery
-
-common.o: common.c common.h
-	$(CC) $(CFLAGS) -c common.c
+all: $(TARGETS)
 
 control_center: control_center.c common.o
-	$(CC) $(CFLAGS) -o control_center control_center.c common.o $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS)
 
 truck: truck.c common.o
-	$(CC) $(CFLAGS) -o truck truck.c common.o $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS)
 
 drone: drone.c common.o
-	$(CC) $(CFLAGS) -o drone drone.c common.o $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS)
 
 artillery: artillery.c common.o
-	$(CC) $(CFLAGS) -o artillery artillery.c common.o $(LIBS)
+	$(CC) -o $@ $^ $(CFLAGS)
+
+common.o: common.c common.h
+	$(CC) -c common.c $(CFLAGS)
 
 clean:
-	rm -f *.o control_center truck drone artillery
+	rm -f $(TARGETS) *.o
 
+run: all
+	@echo "=== Iniciando simulador de drones ==="
+	@echo "1. Iniciando sistema de artillería..."
+	./artillery params.txt &
+	@sleep 2
+	@echo "2. Iniciando centro de control..."
+	./control_center params.txt
+	@echo "=== Simulación terminada ==="
+
+stop:
+	@echo "Deteniendo todos los procesos..."
+	pkill -f "artillery"
+	pkill -f "control_center"
+	pkill -f "truck"
+	pkill -f "drone"
+
+.PHONY: all clean run stop

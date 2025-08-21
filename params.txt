@@ -1,19 +1,27 @@
-# Parámetros globales para Drone Wars 2
+# params.txt - Configuración del simulador de drones
 
-NUM_TARGETS=2
+# Configuración de red
 BASE_PORT=40000
+
+# Configuración de misión
+NUM_TARGETS=2
 ASSEMBLY_SIZE=5
-W=30      # prob derribo artillería
-Q=5       # prob pérdida de comunicación
-Z=5       # segundos de espera recuperación
-RANDOM_SEED=123
+RANDOM_SEED=12345
 
-# Velocidad lineal en X (unidades/segundo)
-VX=10
+# Probabilidades de combate
+W=50        # Probabilidad de derribo por artillería (%)
+Q=5         # Probabilidad de pérdida de enlace (%)
+Z=5         # Tiempo de recuperación de enlace (segundos)
 
-# Radio de la órbita en zona de ensamble
-R=5
+# Configuración de artillería
+ARTILLERY_RATE=2    # Segundos entre ciclos de disparo
 
-# Paso angular en radianes por tick (tick = 1 seg)
-THETA_STEP=0.2
+# Configuración de vuelo y coordenadas
+VX=10.0            # Velocidad en X (unidades/segundo)
+R=5.0              # Radio de órbita en zona de ensamble
+THETA_STEP=0.3     # Paso angular para órbita (radianes/segundo)
 
+# Definición de zonas (coordenadas X)
+B=20.0     # Fin zona de ensamble / Inicio zona de defensa
+A=50.0     # Fin zona de defensa / Inicio zona de re-ensamblaje
+C=100.0    # Posición del blanco

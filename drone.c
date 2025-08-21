@@ -58,7 +58,13 @@ void send_pos(){
     m.swarm_id = swarm_id;
     m.drone_id = global_id;
     snprintf(m.text, sizeof(m.text), "POS %.1f %.1f", x, y);
+    
+    // Enviar al centro de control
     send_msg(sock, center_port, &m);
+    
+    // Enviar también a la artillería
+    int artillery_port = port_for_artillery(BASE_PORT);
+    send_msg(sock, artillery_port, &m);
 }
 
 int is_detonated(){
@@ -119,7 +125,7 @@ void *simulate_flight(void *arg){
         state_unlock();
 
         send_status("IN_ASSEMBLY");
-        send_pos(); // <--- AGREGADO
+        send_pos(); // Envía posición a centro Y artillería
         // Espera TAKEOFF (tiempo corto para no bloquear totalmente)
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -144,7 +150,7 @@ void *simulate_flight(void *arg){
         double locx = x;
         state_unlock();
 
-        send_pos(); // <--- AGREGADO
+        send_pos(); // Envía posición a centro Y artillería
 
         if(!entered_defense && locx >= B){
             entered_defense = 1;
@@ -195,7 +201,7 @@ void *simulate_flight(void *arg){
         int cam = is_camera;
         state_unlock();
 
-        send_pos(); // <--- AGREGADO
+        send_pos(); // Envía posición a centro Y artillería
 
         if(!announced_reassembly && locx >= A){
             announced_reassembly = 1;
@@ -251,6 +257,9 @@ int main(int argc, char **argv){
                 if(strcmp(key,"VX")==0) vx = dval;
                 if(strcmp(key,"R")==0) r = dval;
                 if(strcmp(key,"THETA_STEP")==0) theta_step = dval;
+                if(strcmp(key,"B")==0) B = dval;
+                if(strcmp(key,"A")==0) A = dval;
+                if(strcmp(key,"C")==0) C = dval;
             } else if(sscanf(line,"%[^=]=%d",key,&val)==2){
                 if(strcmp(key,"BASE_PORT")==0) BASE_PORT=val;
                 if(strcmp(key,"Q")==0) Q=val;
@@ -302,6 +311,7 @@ int main(int argc, char **argv){
             handle_command(&rcv);
         } else if(rcv.type==MSG_ARTILLERY){
             if(strstr(rcv.text,"HIT")){
+                printf("[DRONE %d] ¡Impactado por artillería! Destruyendo...\n", global_id);
                 send_status("SHOT_DOWN_BY_ARTILLERY");
                 set_detonated();
                 exit(0);
@@ -310,4 +320,3 @@ int main(int argc, char **argv){
     }
     return 0;
 }
-
