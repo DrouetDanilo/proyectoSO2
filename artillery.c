@@ -225,7 +225,11 @@ void* listener_thread(void* arg) {
             }
         }
         else if(m.type == MSG_ARTILLERY) {
-            if(strstr(m.text, "ENTERING_DEFENSE")) {
+            if(strstr(m.text, "TERMINATE")) {
+                printf("[ARTILLERY] Recibido TERMINATE. Finalizando sistema de artillería...\n");
+                exit(0);
+            }
+            else if(strstr(m.text, "ENTERING_DEFENSE")) {
                 int drone_id;
                 if(sscanf(m.text, "ENTERING_DEFENSE %d", &drone_id) == 1) {
                     printf("[ARTILLERY] Drone %d reportó entrada en zona de defensa\n", drone_id);
@@ -236,7 +240,6 @@ void* listener_thread(void* arg) {
             }
         }
     }
-    
     return NULL;
 }
 

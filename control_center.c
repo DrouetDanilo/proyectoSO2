@@ -129,6 +129,19 @@ void send_target_to_truck(int swarm_id) {
     send_msg(center_sock, truck_port, &cmd);
 }
 
+// Elimina el dron del arreglo y actualiza el conteo
+void remove_drone_from_swarm(int swarm_id, int drone_id) {
+    for(int j=0; j<ASSEMBLY_SIZE; j++) {
+        if(swarms[swarm_id].drone_global_ids[j] == drone_id) {
+            swarms[swarm_id].drone_global_ids[j] = 0;
+            swarms[swarm_id].active_count--;
+            if(swarms[swarm_id].active_count < 0) swarms[swarm_id].active_count = 0;
+            break;
+        }
+    }
+}
+
+// Busca un dron activo en el enjambre donante y lo reasigna
 void reassign_one_from(int donor_id, int target_id){
     if(donor_id<0 || donor_id>=NUM_SWARMS) return;
     if(target_id<0 || target_id>=NUM_SWARMS) return;
@@ -136,29 +149,40 @@ void reassign_one_from(int donor_id, int target_id){
 
     sem_wait(&sem_reassign_line);
     sem_wait(&sem_swarms);
-    int can_donate = (swarms[donor_id].active_count > 0);
-    int needs = (swarms[target_id].active_count < ASSEMBLY_SIZE);
-    sem_post(&sem_swarms);
 
-    if(can_donate && needs){
-        msg_t cmd; memset(&cmd,0,sizeof(cmd));
-        cmd.type = MSG_COMMAND;
-        cmd.swarm_id = donor_id;
-        snprintf(cmd.text,sizeof(cmd.text),"REASSIGN_ONE_TO %d", target_id);
-        int truck_port = port_for_truck(BASE_PORT, donor_id);
-        send_msg(center_sock, truck_port, &cmd);
+    // Solo reasignar si el destino NO está completo y el donante tiene drones activos
+    if(swarms[donor_id].active_count > 0 && swarms[target_id].active_count < ASSEMBLY_SIZE) {
+        // Buscar el primer dron activo en el donante
+        int drone_id = 0;
+        for(int j=0; j<ASSEMBLY_SIZE; j++) {
+            if(swarms[donor_id].drone_global_ids[j] != 0) {
+                drone_id = swarms[donor_id].drone_global_ids[j];
+                swarms[donor_id].drone_global_ids[j] = 0;
+                swarms[donor_id].active_count--;
+                break;
+            }
+        }
+        // Asignar el dron al destino
+        if(drone_id != 0) {
+            for(int j=0; j<ASSEMBLY_SIZE; j++) {
+                if(swarms[target_id].drone_global_ids[j] == 0) {
+                    swarms[target_id].drone_global_ids[j] = drone_id;
+                    swarms[target_id].active_count++;
+                    break;
+                }
+            }
+            // Enviar comando al truck donante para que reasigne el dron
+            msg_t cmd; memset(&cmd,0,sizeof(cmd));
+            cmd.type = MSG_COMMAND;
+            cmd.swarm_id = donor_id;
+            snprintf(cmd.text,sizeof(cmd.text),"REASSIGN_ONE_TO %d", target_id);
+            int truck_port = port_for_truck(BASE_PORT, donor_id);
+            send_msg(center_sock, truck_port, &cmd);
 
-        sem_wait(&sem_swarms);
-        swarms[target_id].active_count++;
-        swarms[donor_id].active_count--;
-        if(swarms[target_id].active_count > ASSEMBLY_SIZE)
-            swarms[target_id].active_count = ASSEMBLY_SIZE;
-        if(swarms[donor_id].active_count < 0)
-            swarms[donor_id].active_count = 0;
-        sem_post(&sem_swarms);
-
-        printf("[CENTER] Reassigned 1 drone from %d to %d\n", donor_id, target_id);
+            printf("[CENTER] Reassigned drone %d from %d to %d\n", drone_id, donor_id, target_id);
+        }
     }
+    sem_post(&sem_swarms);
     sem_post(&sem_reassign_line);
 }
 
@@ -189,7 +213,8 @@ int all_drones_finished(){
     int finished = 1;
     sem_wait(&sem_swarms);
     for(int i=0;i<NUM_SWARMS;i++){
-        if(swarms[i].active_count>0){
+        // Solo cuenta como terminado si el enjambre está vacío o todos sus drones están detonados
+        if(swarms[i].active_count > 0){
             finished = 0;
             break;
         }
@@ -236,8 +261,7 @@ void *listener_thread(void *arg) {
                strstr(m.text,"LOST_LINK") || strstr(m.text,"SHOT_DOWN_BY_ARTILLERY") ||
                strstr(m.text,"CAMERA_AUTODESTRUCT")){
                 sem_wait(&sem_swarms);
-                swarms[m.swarm_id].active_count--;
-                if(swarms[m.swarm_id].active_count<0) swarms[m.swarm_id].active_count=0;
+                remove_drone_from_swarm(m.swarm_id, m.drone_id);
                 sem_post(&sem_swarms);
                 printf("[CENTER] Drone %d del swarm %d terminado. Activos restantes: %d\n", 
                        m.drone_id, m.swarm_id, swarms[m.swarm_id].active_count);
