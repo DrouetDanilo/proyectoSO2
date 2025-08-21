@@ -6,6 +6,13 @@ int BASE_PORT = 40000;
 int ASSEMBLY_SIZE = 5;
 char *params_path;
 
+// Coordenadas del blanco asignado
+double target_x = 100.0;
+double target_y = 0.0;
+int target_id = 0;
+int target_sent = 0;      // Flag para evitar enviar múltiples veces
+int takeoff_sent = 0;     // Flag para evitar enviar múltiples veces
+
 int main(int argc, char **argv){
     if(argc<3){ fprintf(stderr,"Usage: truck params.txt <truck_id>\n"); exit(1); }
     params_path = argv[1];
@@ -17,10 +24,13 @@ int main(int argc, char **argv){
         char line[200];
         while(fgets(line,sizeof(line),f)){
             if(line[0]=='#') continue;
-            char key[80]; int val;
+            char key[80]; int val; double dval;
             if(sscanf(line,"%[^=]=%d",key,&val)==2){
                 if(strcmp(key,"BASE_PORT")==0) BASE_PORT=val;
                 if(strcmp(key,"ASSEMBLY_SIZE")==0) ASSEMBLY_SIZE=val;
+            }
+            else if(sscanf(line,"%[^=]=%lf",key,&dval)==2){
+                if(strcmp(key,"C")==0) target_x=dval;
             }
         }
         fclose(f);
@@ -66,13 +76,34 @@ int main(int argc, char **argv){
         }
     }
 
-    // truck listens for commands from center (e.g., REASSIGN_ONE_TO)
+    // truck listens for commands from center (e.g., REASSIGN_ONE_TO, TARGET)
     msg_t rcv; struct sockaddr_in from;
     while(1){
         if(recv_msg(sock,&rcv,&from)<=0) { usleep(100000); continue; }
         if(rcv.type==MSG_COMMAND){
             printf("[TRUCK %d] CMD: %s\n",truck_id, rcv.text);
-            if(strncmp(rcv.text,"REASSIGN_ONE_TO",15)==0){
+            
+            if(strncmp(rcv.text,"TARGET",6)==0){
+                // Recibir coordenadas del blanco: "TARGET x y id"
+                if(sscanf(rcv.text,"TARGET %lf %lf %d", &target_x, &target_y, &target_id) == 3 && !target_sent){
+                    printf("[TRUCK %d] Blanco asignado: ID=%d, Pos=(%.1f, %.1f)\n", 
+                           truck_id, target_id, target_x, target_y);
+                    
+                    // Enviar coordenadas del blanco a todos los drones (solo una vez)
+                    for(int i=0;i<ASSEMBLY_SIZE;i++){
+                        int gid = truck_id*100 + i + 1;
+                        int dport = port_for_drone(BASE_PORT, gid);
+                        msg_t cmd; memset(&cmd,0,sizeof(cmd));
+                        cmd.type = MSG_COMMAND;
+                        cmd.swarm_id = truck_id;
+                        cmd.drone_id = gid;
+                        snprintf(cmd.text,sizeof(cmd.text),"TARGET %.1f %.1f %d", target_x, target_y, target_id);
+                        send_msg(sock, dport, &cmd);
+                    }
+                    target_sent = 1; // Marcar como enviado
+                }
+            }
+            else if(strncmp(rcv.text,"REASSIGN_ONE_TO",15)==0){
                 // choose one drone and send command to that drone's port (simple: pick first existing)
                 // For simplicity we broadcast to all potential drone global ids in this truck
                 for(int i=0;i<50;i++){
@@ -85,22 +116,25 @@ int main(int argc, char **argv){
                     snprintf(cmd.text,sizeof(cmd.text),"GO_TO_SWARM %s", rcv.text + 16);
                     send_msg(sock, dport, &cmd);
                 }
-            } else if(strncmp(rcv.text,"TAKEOFF",7)==0){
-                // broadcast TAKEOFF to all drones of this truck
-                for(int i=0;i<ASSEMBLY_SIZE;i++){
-                    int gid = truck_id*100 + i + 1;
-                    int dport = port_for_drone(BASE_PORT, gid);
-                    msg_t cmd; memset(&cmd,0,sizeof(cmd));
-                    cmd.type = MSG_COMMAND;
-                    cmd.swarm_id = truck_id;
-                    cmd.drone_id = gid;
-                    snprintf(cmd.text,sizeof(cmd.text),"TAKEOFF");
-                    printf("[TRUCK %d] Enviando TAKEOFF a drone %d (puerto %d)\n", truck_id, gid, dport);
-                    send_msg(sock, dport, &cmd);
+            } 
+            else if(strncmp(rcv.text,"TAKEOFF",7)==0){
+                // broadcast TAKEOFF to all drones of this truck (solo una vez)
+                if(!takeoff_sent){
+                    for(int i=0;i<ASSEMBLY_SIZE;i++){
+                        int gid = truck_id*100 + i + 1;
+                        int dport = port_for_drone(BASE_PORT, gid);
+                        msg_t cmd; memset(&cmd,0,sizeof(cmd));
+                        cmd.type = MSG_COMMAND;
+                        cmd.swarm_id = truck_id;
+                        cmd.drone_id = gid;
+                        snprintf(cmd.text,sizeof(cmd.text),"TAKEOFF");
+                        printf("[TRUCK %d] Enviando TAKEOFF a drone %d (puerto %d)\n", truck_id, gid, dport);
+                        send_msg(sock, dport, &cmd);
+                    }
+                    takeoff_sent = 1; // Marcar como enviado
                 }
             }
         }
     }
     return 0;
 }
-

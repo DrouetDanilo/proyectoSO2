@@ -1,4 +1,4 @@
-// drone.c (con coordenadas, semaforos y velocidad configurable desde params.txt)
+// drone.c (con movimiento en Y hacia blanco aleatorio)
 #include "common.h"
 #include <math.h>
 #include <semaphore.h>
@@ -12,7 +12,7 @@ int ASSEMBLY_SIZE = 5;
 // Zonas (eje X)
 double B = 20.0;   // fin zona ensamble
 double A = 50.0;   // fin zona defensa / inicio re-ensamble
-double C = 100.0;  // blanco
+double C = 100.0;  // blanco base X
 
 // Identidad / red
 int global_id;
@@ -27,6 +27,12 @@ volatile int detonated = 0;
 volatile int reassigned = 0;
 volatile int is_camera = 0;
 
+// Coordenadas del blanco asignado
+volatile double target_x = 100.0;
+volatile double target_y = 0.0;
+volatile int target_id = 0;
+volatile int target_received = 0;
+
 // Semáforos
 sem_t sem_state;    // binario -> mutex
 sem_t sem_takeoff;  // 0 hasta que el centro ordene despegar
@@ -36,6 +42,7 @@ pthread_t fuel_thread, weapon_thread, nav_thread;
 // Coordenadas y movimiento
 double x=0.0, y=0.0;
 double vx=10.0;        // velocidad en X (u/seg)
+double vy=10.0;        // velocidad en Y (u/seg)
 double theta=0.0;     // ángulo para orbitar
 double r=5.0;         // radio órbita
 double theta_step=0.3; // paso angular (rad/seg)
@@ -137,22 +144,67 @@ void *simulate_flight(void *arg){
         }
     }
 
-    // 2) Avance recto: B -> A (defensa)
+    // Esperar a recibir coordenadas del blanco antes de avanzar
+    while(!target_received && !is_detonated()) {
+        usleep(100000); // 100ms
+    }
+
+    // 2) Avance hacia el blanco: movimiento en X e Y
     int entered_defense = 0;
     while(1){
         if(is_detonated()) return NULL;
         sleep(1);
 
-        // Mover recto en X
+        // Obtener coordenadas del blanco
         state_lock();
-        y = 0;
-        x += vx;
+        double tx = target_x;
+        double ty = target_y;
+        state_unlock();
+
+        // Calcular dirección hacia el blanco
+        double dx = tx - x;
+        double dy = ty - y;
+        double distance = sqrt(dx*dx + dy*dy);
+
+        // Si estamos muy cerca del blanco, hemos llegado
+        if(distance < 2.0) { // Aumentar tolerancia
+            state_lock();
+            int cam = is_camera;
+            state_unlock();
+            
+            if(cam){
+                send_status("CAMERA_REPORTED");
+                send_status("CAMERA_AUTODESTRUCT");
+            } else {
+                send_status("ARRIVED_DETONATED");
+            }
+            set_detonated();
+            exit(0);
+        }
+
+        // Mover hacia el blanco con paso fijo para evitar oscilaciones
+        state_lock();
+        if(distance > 0) {
+            // Normalizar y aplicar velocidad, pero no sobrepasar el blanco
+            double norm_dx = dx / distance;
+            double norm_dy = dy / distance;
+            
+            double step_x = vx * norm_dx;
+            double step_y = vy * norm_dy;
+            
+            // Limitar el paso para no sobrepasar el blanco
+            if(fabs(step_x) > fabs(dx)) step_x = dx;
+            if(fabs(step_y) > fabs(dy)) step_y = dy;
+            
+            x += step_x;
+            y += step_y;
+        }
         double locx = x;
         state_unlock();
 
         send_pos(); // Envía posición a centro Y artillería
 
-        if(!entered_defense && locx >= B){
+        if(!entered_defense && locx >= B && locx < A){
             entered_defense = 1;
             send_status("ENTERING_DEFENSE");
             // Notificar a artillería
@@ -185,39 +237,11 @@ void *simulate_flight(void *arg){
             }
         }
 
-        if(locx >= A) break;
-    }
-
-    // 3) Re-ensamblaje: A -> C
-    int announced_reassembly = 0;
-    while(1){
-        if(is_detonated()) return NULL;
-        sleep(1);
-
-        state_lock();
-        y = 0;
-        x += vx;
-        double locx = x;
-        int cam = is_camera;
-        state_unlock();
-
-        send_pos(); // Envía posición a centro Y artillería
-
-        if(!announced_reassembly && locx >= A){
+        // Anunciar re-ensamblaje si pasamos de A (solo una vez)
+        static int announced_reassembly = 0;
+        if(locx >= A && !announced_reassembly){
             announced_reassembly = 1;
             send_status("IN_REASSEMBLY");
-        }
-
-        // Llegó al blanco
-        if(locx >= C){
-            if(cam){
-                send_status("CAMERA_REPORTED");
-                send_status("CAMERA_AUTODESTRUCT");
-            } else {
-                send_status("ARRIVED_DETONATED");
-            }
-            set_detonated();
-            exit(0);
         }
     }
     return NULL;
@@ -226,6 +250,20 @@ void *simulate_flight(void *arg){
 void handle_command(msg_t *m){
     if(strcmp(m->text,"TAKEOFF")==0){
         sem_post(&sem_takeoff);
+    }
+    else if(strncmp(m->text,"TARGET",6)==0){
+        double tx, ty;
+        int tid;
+        if(sscanf(m->text,"TARGET %lf %lf %d", &tx, &ty, &tid) == 3){
+            state_lock();
+            target_x = tx;
+            target_y = ty;
+            target_id = tid;
+            target_received = 1;
+            state_unlock();
+            printf("[DRONE %d] Blanco asignado: ID=%d, Pos=(%.1f, %.1f)\n", 
+                   global_id, tid, tx, ty);
+        }
     }
     else if(strncmp(m->text,"GO_TO_SWARM",11)==0){
         int target = -1;
@@ -255,6 +293,7 @@ int main(int argc, char **argv){
             char key[80]; double dval; int val;
             if(sscanf(line,"%[^=]=%lf",key,&dval)==2){
                 if(strcmp(key,"VX")==0) vx = dval;
+                if(strcmp(key,"VY")==0) vy = dval; // Nueva velocidad Y
                 if(strcmp(key,"R")==0) r = dval;
                 if(strcmp(key,"THETA_STEP")==0) theta_step = dval;
                 if(strcmp(key,"B")==0) B = dval;
@@ -270,6 +309,9 @@ int main(int argc, char **argv){
         }
         fclose(f);
     }
+
+    // Si no se especificó VY, usar el mismo valor que VX
+    if(vy == 10.0 && vx != 10.0) vy = vx;
 
     // Inicializar semáforos
     sem_init(&sem_state, 0, 1);

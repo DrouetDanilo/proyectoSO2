@@ -4,12 +4,13 @@
 BASE_PORT=40000
 
 # Configuración de misión
-NUM_TARGETS=2
+NUM_TARGETS=2      # Número de blancos
+NUM_SWARMS=2       # Número de enjambres/trucks
 ASSEMBLY_SIZE=5
 RANDOM_SEED=12345
 
 # Probabilidades de combate
-W=50        # Probabilidad de derribo por artillería (%)
+W=20        # Probabilidad de derribo por artillería (%)
 Q=5         # Probabilidad de pérdida de enlace (%)
 Z=5         # Tiempo de recuperación de enlace (segundos)
 
@@ -17,11 +18,12 @@ Z=5         # Tiempo de recuperación de enlace (segundos)
 ARTILLERY_RATE=2    # Segundos entre ciclos de disparo
 
 # Configuración de vuelo y coordenadas
-VX=10.0            # Velocidad en X (unidades/segundo)
+VX=5.0             # Velocidad en X (unidades/segundo) - Reducida para más control
+VY=5.0             # Velocidad en Y (unidades/segundo) - Reducida para más control
 R=5.0              # Radio de órbita en zona de ensamble
 THETA_STEP=0.3     # Paso angular para órbita (radianes/segundo)
 
 # Definición de zonas (coordenadas X)
 B=20.0     # Fin zona de ensamble / Inicio zona de defensa
 A=50.0     # Fin zona de defensa / Inicio zona de re-ensamblaje
-C=100.0    # Posición del blanco
+C=100.0    # Posición X base de los blancos
