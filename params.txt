@@ -10,7 +10,7 @@ ASSEMBLY_SIZE=5
 RANDOM_SEED=12345
 
 # Probabilidades de combate
-W=20        # Probabilidad de derribo por artillería (%)
+W=0        # Probabilidad de derribo por artillería (%)
 Q=5         # Probabilidad de pérdida de enlace (%)
 Z=5         # Tiempo de recuperación de enlace (segundos)
 
