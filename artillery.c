@@ -123,6 +123,7 @@ void update_drone_position(int drone_id, int swarm_id, double x, double y) {
     
     drone->x = x;
     drone->y = y;
+    drone->swarm_id = swarm_id; // actualizar swarm en caso de reconformación
     drone->last_update = time(NULL);
     
     // Verificar si entró en zona de defensa
@@ -203,6 +204,17 @@ void print_artillery_status() {
     sem_post(&sem_tracking);
 }
 
+void mark_drone_dead(int drone_id) {
+    sem_wait(&sem_tracking);
+    for(int i = 0; i < num_tracked; i++) {
+        if(drones[i].global_id == drone_id) {
+            drones[i].active = 0;
+            printf("[ARTILLERY] Drone %d eliminado del tracking\n", drone_id);
+        }
+    }
+    sem_post(&sem_tracking);
+}
+
 void* listener_thread(void* arg) {
     (void)arg;
     
@@ -223,20 +235,36 @@ void* listener_thread(void* arg) {
                     update_drone_position(m.drone_id, m.swarm_id, x, y);
                 }
             }
+            else if(strstr(m.text, "ARRIVED_DETONATED") ||
+                    strstr(m.text, "CAMERA_AUTODESTRUCT")) {
+                mark_drone_dead(m.drone_id);
+            }
         }
         else if(m.type == MSG_ARTILLERY) {
             if(strstr(m.text, "TERMINATE")) {
                 printf("[ARTILLERY] Recibido TERMINATE. Finalizando sistema de artillería...\n");
                 exit(0);
             }
+            else if(strstr(m.text, "SHOT_DOWN")) {
+                mark_drone_dead(m.drone_id);
+            }
             else if(strstr(m.text, "ENTERING_DEFENSE")) {
-                int drone_id;
-                if(sscanf(m.text, "ENTERING_DEFENSE %d", &drone_id) == 1) {
-                    printf("[ARTILLERY] Drone %d reportó entrada en zona de defensa\n", drone_id);
-                }
+                printf("[ARTILLERY] Drone %d reportó entrada en zona de defensa\n", m.drone_id);
             }
             else if(strstr(m.text, "TRUCK_READY")) {
                 printf("[ARTILLERY] %s\n", m.text);
+            }
+            else if(strncmp(m.text, "REASSIGN", 8) == 0) {
+                int drone_id, new_swarm;
+                if(sscanf(m.text, "REASSIGN %d %d", &drone_id, &new_swarm) == 2) {
+                    sem_wait(&sem_tracking);
+                    tracked_drone_t* d = find_drone(drone_id);
+                    if(d) {
+                        d->swarm_id = new_swarm;
+                        printf("[ARTILLERY] Drone %d reasignado a swarm %d\n", drone_id, new_swarm);
+                    }
+                    sem_post(&sem_tracking);
+                }
             }
         }
     }

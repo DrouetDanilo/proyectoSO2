@@ -1,4 +1,4 @@
-// drone.c (con movimiento en Y hacia blanco aleatorio)
+// drone.c (con movimiento en Y hacia blanco aleatorio y manejo de autodestrucción)
 #include "common.h"
 #include <math.h>
 #include <semaphore.h>
@@ -26,6 +26,7 @@ volatile int fuel_percent = 100;
 volatile int detonated = 0;
 volatile int reassigned = 0;
 volatile int is_camera = 0;
+volatile int autodestruct_received = 0; // Nuevo flag para autodestrucción
 
 // Coordenadas del blanco asignado
 volatile double target_x = 100.0;
@@ -83,9 +84,44 @@ void set_detonated(){
     state_lock(); detonated = 1; state_unlock();
 }
 
+int is_autodestruct_received(){
+    int v;
+    state_lock(); v = autodestruct_received; state_unlock();
+    return v;
+}
+void set_autodestruct_received(){
+    state_lock(); autodestruct_received = 1; state_unlock();
+}
+
+void perform_autodestruct(){
+    printf("[DRONE %d] Ejecutando autodestrucción por orden del centro de control\n", global_id);
+    send_status("AUTODESTRUCT_CONFIRMED");
+    set_detonated();
+    
+    // Dar tiempo para que el mensaje se envíe
+    usleep(100000); // 100ms
+    
+    // Cancelar todos los threads
+    pthread_cancel(fuel_thread);
+    pthread_cancel(weapon_thread);
+    pthread_cancel(nav_thread);
+    
+    // Limpiar recursos
+    sem_destroy(&sem_state);
+    sem_destroy(&sem_takeoff);
+    close(sock);
+    
+    exit(0);
+}
+
 void *fuel_control(void *arg){
     (void)arg;
     while(1){
+        // Verificar autodestrucción cada iteración
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
+        
         sleep(1);
         state_lock();
         if(detonated){ state_unlock(); break; }
@@ -110,6 +146,11 @@ void *weapon_or_camera(void *arg){
     state_unlock();
 
     while(1){
+        // Verificar autodestrucción cada iteración
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
+        
         sleep(1);
         if(is_detonated()) break;
     }
@@ -122,6 +163,11 @@ void *simulate_flight(void *arg){
     // 1) Vuelo hasta zona de ensamble (orbitar)
     // Espera a TAKEOFF con semáforo (centro hace sem_post)
     while(1){
+        // Verificar autodestrucción cada iteración
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
+        
         if(is_detonated()) return NULL;
 
         // Orbitar en torno a (B,0)
@@ -145,13 +191,21 @@ void *simulate_flight(void *arg){
     }
 
     // Esperar a recibir coordenadas del blanco antes de avanzar
-    while(!target_received && !is_detonated()) {
+    while(!target_received && !is_detonated() && !is_autodestruct_received()) {
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
         usleep(100000); // 100ms
     }
 
     // 2) Avance hacia el blanco: movimiento en X e Y
     int entered_defense = 0;
     while(1){
+        // Verificar autodestrucción cada iteración
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
+        
         if(is_detonated()) return NULL;
         sleep(1);
 
@@ -223,6 +277,10 @@ void *simulate_flight(void *arg){
                 send_status("LOST_LINK");
                 int recovered = 0;
                 for(int w=0;w<Z;w++){
+                    // Verificar autodestrucción durante recuperación
+                    if(is_autodestruct_received()){
+                        perform_autodestruct();
+                    }
                     sleep(1);
                     if(rand()%100 < 50){ recovered = 1; break; }
                 }
@@ -265,6 +323,21 @@ void handle_command(msg_t *m){
                    global_id, tid, tx, ty);
         }
     }
+    else if(strncmp(m->text,"RETARGET",8)==0){
+        double tx, ty;
+        int tid;
+        if(sscanf(m->text,"RETARGET %lf %lf %d", &tx, &ty, &tid) == 3){
+            state_lock();
+            target_x = tx;
+            target_y = ty;
+            target_id = tid;
+            target_received = 1;
+            state_unlock();
+            printf("[DRONE %d] Blanco reasignado: ID=%d, Pos=(%.1f, %.1f)\n", 
+                   global_id, tid, tx, ty);
+            send_status("RETARGET_RECEIVED");
+        }
+    }
     else if(strncmp(m->text,"GO_TO_SWARM",11)==0){
         int target = -1;
         if(sscanf(m->text+11,"%d",&target)==1){
@@ -274,6 +347,11 @@ void handle_command(msg_t *m){
             state_unlock();
             send_status("REASSIGNED");
         }
+    }
+    else if(strcmp(m->text,"AUTODESTRUCT_ALL")==0){
+        printf("[DRONE %d] Recibido comando AUTODESTRUCT_ALL del centro de control\n", global_id);
+        set_autodestruct_received();
+        // La autodestrucción se ejecutará en el próximo ciclo de cualquier thread
     }
 }
 
@@ -331,12 +409,12 @@ int main(int argc, char **argv){
         exit(1);
     }
 
-    // HELLO inicial
+    // HELLO inicial con PID para que el centro pueda hacer seguimiento
     msg_t hello; memset(&hello,0,sizeof(hello));
     hello.type = MSG_HELLO;
     hello.swarm_id = swarm_id;
     hello.drone_id = global_id;
-    snprintf(hello.text,sizeof(hello.text),"DRONE_HELLO %d", global_id);
+    snprintf(hello.text,sizeof(hello.text),"DRONE_HELLO %d PID %d", global_id, getpid());
     send_msg(sock, center_port, &hello);
 
     srand(time(NULL) ^ global_id);
@@ -348,7 +426,16 @@ int main(int argc, char **argv){
     // Bucle de recepción
     msg_t rcv; struct sockaddr_in from;
     while(1){
-        if(recv_msg(sock,&rcv,&from)<=0){ usleep(100000); continue; }
+        // Verificar autodestrucción en el bucle principal también
+        if(is_autodestruct_received()){
+            perform_autodestruct();
+        }
+        
+        if(recv_msg(sock,&rcv,&from)<=0){ 
+            usleep(100000); 
+            continue; 
+        }
+        
         if(rcv.type==MSG_COMMAND){
             handle_command(&rcv);
         } else if(rcv.type==MSG_ARTILLERY){
