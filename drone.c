@@ -227,6 +227,7 @@ void *simulate_flight(void *arg){
             state_unlock();
             
             if(cam){
+                sleep(6);
                 send_status("CAMERA_REPORTED");
                 send_status("CAMERA_AUTODESTRUCT");
             } else {

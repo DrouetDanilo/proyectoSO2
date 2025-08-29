@@ -596,23 +596,41 @@ void *listener_thread(void *arg) {
                 sem_post(&sem_swarms);
                 
             }
-            else if(strstr(m.text,"CAMERA_REPORTED")){
-                // La cámara SOLO reporta si es el último activo del enjambre y no se ha reportado antes
-               sem_wait(&sem_swarms);
+          
+else if(strstr(m.text,"CAMERA_REPORTED")){
+        
+    sem_wait(&sem_swarms);
     if(!swarms[m.swarm_id].is_destroyed && !swarms[m.swarm_id].camera_reported){
         swarms[m.swarm_id].camera_reported = 1;
+        
+        // Contar cuántos drones del enjambre llegaron efectivamente al blanco
+        // (los que no fueron terminados antes de llegar)
+       int drones_that_attacked = 5 - swarms[m.swarm_id].active_count;
+        
+        
+        
+        
+        // Determinar estado del blanco basándose en efectividad del ataque
+        const char* target_status_str;
+        if(drones_that_attacked >= ASSEMBLY_SIZE-1) {
+            target_status_str = "DESTRUIDO";           // Enjambre completo = destrucción total
+        } else if(drones_that_attacked >= 2) {
+            target_status_str = "PARCIALMENTE_DESTRUIDO"; // 2+ drones = daño parcial
+        } else {
+            target_status_str = "ENTERO";              // 1 drone = sin daño significativo
+        }
+        
         remove_drone_from_swarm(m.swarm_id, m.drone_id);
         sem_post(&sem_swarms);
 
         printf("[CENTER] * REPORTE DE CAMARA *\n");
-        printf("[CENTER] * BLANCO %d: %s *\n",
-               swarms[m.swarm_id].target_id,
-               swarms[m.swarm_id].target_destroyed ? "DESTRUIDO" : "ENTERO");
-
+        printf("[CENTER] * BLANCO %d: %s (%d drones atacaron) *\n",
+               swarms[m.swarm_id].target_id, target_status_str, drones_that_attacked);
         
     } else {
         sem_post(&sem_swarms);
-    }            }
+    }
+}
             else if(strstr(m.text,"IN_ASSEMBLY")){
                 sem_wait(&sem_swarms);
                 if(!swarms[m.swarm_id].is_destroyed) {
