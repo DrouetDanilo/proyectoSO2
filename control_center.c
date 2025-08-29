@@ -1,4 +1,4 @@
-// control_center.c (version con fallo de artilleria)
+// control_center.c (version con fallo de artilleria CORREGIDO)
 #include "common.h"
 #include <semaphore.h>
 #include <math.h>
@@ -106,7 +106,6 @@ void assign_random_targets() {
                i, tid, swarms[i].target_x, swarms[i].target_y);
     }
 }
-
 
 void spawn_trucks_and_drones() {
     for(int i=0;i<NUM_SWARMS;i++){
@@ -276,6 +275,13 @@ void autodestruct_swarm_drones(int swarm_id) {
     send_msg(center_sock, truck_port, &truck_cmd);
 }
 
+// Función auxiliar para verificar si un swarm necesita reconformación
+int swarm_needs_reassembly(int swarm_id) {
+    return (swarms[swarm_id].active_count > 0 && 
+            swarms[swarm_id].active_count < ASSEMBLY_SIZE && 
+            !swarms[swarm_id].is_destroyed);
+}
+
 // Reasigna un drone desde un swarm donante a uno objetivo.
 // Regla: solo se puede donar desde swarms incompletos (no tomar de swarms completos).
 void reassign_one_from(int donor_id, int target_id) {
@@ -355,6 +361,10 @@ void reassign_one_from(int donor_id, int target_id) {
     double ty = swarms[target_id].target_y;
     int    tid = swarms[target_id].target_id;
 
+    // ✅ CLAVE: Verificar si el donante ahora necesita reconformación
+    int donor_now_needs_reassembly = swarm_needs_reassembly(donor_id);
+    int donor_already_in_reassembly = swarms[donor_id].in_reassembly;
+
     printf("[CENTER] Reassigned drone %d from swarm %d (slot %d) to swarm %d (slot %d)\n",
            drone_id, donor_id, donor_slot, target_id, target_slot);
 
@@ -372,7 +382,7 @@ void reassign_one_from(int donor_id, int target_id) {
     // 2) El receptor recibe/actualiza TARGET y fuerza retargeting del dron reasignado
     send_target_to_truck_coords(target_id, tx, ty, tid);
 
-    // 3) Aviso directo al dron reasignado para que no “ataque” coordenadas antiguas
+    // 3) Aviso directo al dron reasignado para que no "ataque" coordenadas antiguas
     int drone_port = port_for_drone(BASE_PORT, drone_id);
     msg_t cmd_dr; memset(&cmd_dr,0,sizeof(cmd_dr));
     cmd_dr.type = MSG_COMMAND;
@@ -380,6 +390,13 @@ void reassign_one_from(int donor_id, int target_id) {
     cmd_dr.drone_id = drone_id;
     snprintf(cmd_dr.text,sizeof(cmd_dr.text),"RETARGET %.1f %.1f %d", tx, ty, tid);
     send_msg(center_sock, drone_port, &cmd_dr);
+
+    // ✅ NUEVA LÓGICA: Si el donante ahora necesita reconformación, iniciarla
+    if(donor_now_needs_reassembly && !donor_already_in_reassembly) {
+        printf("[CENTER] Donor swarm %d now needs reassembly after donation\n", donor_id);
+        start_reassembly_process(donor_id);
+        // Intentar reconformar inmediatamente en un hilo separado o marcar para proceso posterior
+    }
 
     sem_post(&sem_reassign_line);
 }
@@ -451,6 +468,22 @@ void autodestruct_swarm(int swarm_id) {
     sem_post(&sem_swarms);
 }
 
+// ✅ NUEVA FUNCIÓN: Verifica si hay swarms donantes que ahora necesitan reconformación
+void check_donor_swarms_for_reassembly() {
+    for(int i = 0; i < NUM_SWARMS; i++) {
+        sem_wait(&sem_swarms);
+        int needs_reassembly = swarm_needs_reassembly(i);
+        int already_in_reassembly = swarms[i].in_reassembly;
+        sem_post(&sem_swarms);
+
+        if(needs_reassembly && !already_in_reassembly) {
+            printf("[CENTER] Detected donor swarm %d needs reassembly - starting process\n", i);
+            start_reassembly_process(i);
+            try_reconform_or_autodestruct(i);
+        }
+    }
+}
+
 // Revisa periódicamente timeouts SOLO si el swarm está efectivamente en reconformación
 void check_reassembly_timeouts() {
     for(int i = 0; i < NUM_SWARMS; i++) {
@@ -481,10 +514,17 @@ void check_reassembly_timeouts() {
                     if(can_try) try_reconform_or_autodestruct(i);
                 }
             } else {
-                // El swarm está incompleto pero aún no ha declarado IN_REASSEMBLY
+                // ✅ El swarm está incompleto pero aún no ha declarado IN_REASSEMBLY
+                // Esto puede pasar con swarms donantes - iniciar su proceso
+                printf("[CENTER] Swarm %d is incomplete but not in reassembly - starting process\n", i);
+                start_reassembly_process(i);
+                try_reconform_or_autodestruct(i);
             }
         }
     }
+    
+    // ✅ Verificar swarms donantes que puedan necesitar reconformación
+    check_donor_swarms_for_reassembly();
 }
 
 int all_drones_finished(){
